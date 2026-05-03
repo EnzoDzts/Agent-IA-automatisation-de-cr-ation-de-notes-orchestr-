@@ -1,0 +1,24 @@
+# Credentials et secrets - JAMAIS commit
+.env
+.env.local
+*.env
+credentials.json
+secrets.json
+
+# n8n
+.n8n/
+n8n-data/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Editors
+.vscode/
+.idea/
+*.sublime-*
+
+# Logs
+*.log
+npm-debug.log*
