@@ -1,0 +1,153 @@
+{
+  "name": "Note Summarizer — Brouillon → Notion",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "note-summarizer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "42452ba6-95e4-4d6a-9e76-bc2024681110",
+      "name": "Reception du brouillon",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "d9a28f7f-c5b7-4862-9908-1ab6c04205b0"
+    },
+    {
+      "parameters": {
+        "resource": "text",
+        "operation": "message",
+        "modelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-4-5-20250929"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Brouillon à transformer :\n---\n{{ $json.body.draft }}\n---\n{{ $json.body.context ? \"\\nContexte additionnel : \" + $json.body.context : \"\" }}",
+              "role": "user"
+            }
+          ]
+        },
+        "simplify": true,
+        "options": {
+          "system": "Tu es un assistant expert en synthèse de notes professionnelles.\nTu reçois un brouillon brut (mots-clés, fragments, phrases incomplètes).\nTon rôle : produire une note CONCISE, STRUCTURÉE et PRÉSENTABLE.\n\nRéponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après, sans balises markdown.\nSchéma exact attendu :\n{\n  \"title\": \"Titre clair, max 80 caractères\",\n  \"summary\": \"Résumé en 2-3 phrases qui capture l'essentiel\",\n  \"key_points\": [\"point clé 1\", \"point clé 2\"],\n  \"action_items\": [\"action concrète 1\"],\n  \"tags\": [\"tag1\", \"tag2\"],\n  \"category\": \"Réunion|Idée|Tâche|Recherche|Personnel|Autre\",\n  \"content_md\": \"Contenu détaillé en markdown\"\n}\n\nRègles :\n- Si une info manque, NE PAS l'inventer.\n- key_points et action_items : phrases courtes, factuelles.\n- tags : 2-5 max, en minuscules, sans #.\n- category : doit être EXACTEMENT une de ces valeurs : Réunion, Idée, Tâche, Recherche, Personnel, Autre.\n- content_md : sections ## Contexte, ## Décisions, ## Actions, ## Suivi (uniquement les pertinentes).\n- Reste fidèle au brouillon.",
+          "maxTokens": 2048,
+          "temperature": 0.3,
+          "includeMergedResponse": true
+        }
+      },
+      "id": "1fe514b9-72b0-4a2e-b812-4ad904866d5f",
+      "name": "Synthese par Claude",
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "let raw;\nif ($json.text) raw = $json.text;\nelse if ($json.output_text) raw = $json.output_text;\nelse if ($json.content && Array.isArray($json.content)) raw = $json.content.map(c => c.text || '').join('');\nelse if ($json.message && $json.message.content && $json.message.content[0]) raw = $json.message.content[0].text;\nelse raw = JSON.stringify($json);\nlet cleaned = String(raw).trim();\nconst fence = cleaned.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/);\nif (fence) cleaned = fence[1].trim();\nconst start = cleaned.indexOf('{');\nconst end = cleaned.lastIndexOf('}');\nif (start !== -1 && end !== -1) cleaned = cleaned.slice(start, end + 1);\nlet parsed;\ntry { parsed = JSON.parse(cleaned); }\ncatch (e) {\n  parsed = { title: 'Note (parsing échoué)', summary: String(raw).slice(0, 280), key_points: [], action_items: [], tags: ['parse-error'], category: 'Autre', content_md: String(raw) };\n}\nconst trigger_data = $('Reception du brouillon').item.json.body || {};\nreturn { json: {\n  title: parsed.title || 'Note sans titre',\n  summary: parsed.summary || '',\n  key_points: Array.isArray(parsed.key_points) ? parsed.key_points : [],\n  action_items: Array.isArray(parsed.action_items) ? parsed.action_items : [],\n  tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 5) : [],\n  category: parsed.category || 'Autre',\n  content_md: parsed.content_md || '',\n  source: trigger_data.source || 'webhook',\n  created_at: new Date().toISOString(),\n} };"
+      },
+      "id": "fef898e5-0d36-4388-a094-49b2d86106b7",
+      "name": "Parse JSON Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const data = $json;\nfunction rt(text) { return [{ type: 'text', text: { content: String(text == null ? '' : text) } }]; }\nfunction paragraph(text) { return { object: 'block', type: 'paragraph', paragraph: { rich_text: rt(text) } }; }\nfunction heading(text, level) {\n  const key = level === 1 ? 'heading_1' : level === 3 ? 'heading_3' : 'heading_2';\n  return { object: 'block', type: key, [key]: { rich_text: rt(text) } };\n}\nfunction bullet(text) { return { object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rt(text) } }; }\nfunction todo(text) { return { object: 'block', type: 'to_do', to_do: { rich_text: rt(text), checked: false } }; }\nfunction divider() { return { object: 'block', type: 'divider', divider: {} }; }\nfunction callout(text, emoji) {\n  return { object: 'block', type: 'callout', callout: { rich_text: rt(text), icon: { type: 'emoji', emoji: emoji || '💡' } } };\n}\nconst blocks = [];\nif (data.summary) { blocks.push(callout(data.summary, '📝')); blocks.push(divider()); }\nif (Array.isArray(data.key_points) && data.key_points.length) {\n  blocks.push(heading('Points clés', 2));\n  for (const p of data.key_points) blocks.push(bullet(p));\n}\nif (Array.isArray(data.action_items) && data.action_items.length) {\n  blocks.push(heading('Actions à mener', 2));\n  for (const a of data.action_items) blocks.push(todo(a));\n}\nif (data.content_md) {\n  blocks.push(divider());\n  blocks.push(heading('Détails', 2));\n  const lines = String(data.content_md).split(/\\r?\\n/);\n  for (const raw of lines) {\n    const line = raw.trim();\n    if (!line) continue;\n    if (line.startsWith('### ')) blocks.push(heading(line.slice(4), 3));\n    else if (line.startsWith('## ')) blocks.push(heading(line.slice(3), 2));\n    else if (line.startsWith('# ')) blocks.push(heading(line.slice(2), 1));\n    else if (line.startsWith('- [ ] ') || line.startsWith('* [ ] ')) blocks.push(todo(line.slice(6)));\n    else if (line.startsWith('- ') || line.startsWith('* ')) blocks.push(bullet(line.slice(2)));\n    else blocks.push(paragraph(line));\n  }\n}\nconst validCategories = ['Réunion', 'Idée', 'Tâche', 'Recherche', 'Personnel', 'Autre'];\nconst category = validCategories.indexOf(data.category) !== -1 ? data.category : 'Autre';\nconst tags = Array.isArray(data.tags) ? data.tags.filter(t => t && typeof t === 'string').slice(0, 10) : [];\nreturn { json: { ...data, category, tags, notion_children: blocks.slice(0, 100) } };"
+      },
+      "id": "796872e4-6a84-459f-8df0-e7f6c9c2a016",
+      "name": "Construire blocs Notion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "provideSslCertificates": false,
+        "sendQuery": false,
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            { "name": "Notion-Version", "value": "2022-06-28" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parent: { database_id: \"REMPLACER_PAR_TON_ID_DE_BASE_NOTION\" }, icon: { type: \"emoji\", emoji: \"📝\" }, properties: { \"Titre\": { title: [{ text: { content: $json.title } }] }, \"Catégorie\": { select: { name: $json.category } }, \"Tags\": { multi_select: $json.tags.map(t => ({ name: t })) }, \"Source\": { rich_text: [{ text: { content: $json.source } }] } }, children: $json.notion_children }) }}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "e2010792-0de6-4648-b3e9-1b583ec40871",
+      "name": "Creer page Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1440, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, notion_url: $json.url, notion_id: $json.id, title: $(\"Parse JSON Claude\").item.json.title, summary: $(\"Parse JSON Claude\").item.json.summary, tags: $(\"Parse JSON Claude\").item.json.tags, category: $(\"Parse JSON Claude\").item.json.category }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "76dcd0d5-c920-4732-9261-f05a84a7ad01",
+      "name": "Reponse au client",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1740, 300]
+    },
+    {
+      "parameters": {
+        "content": "## Note Summarizer\n\nWebhook → Claude (Sonnet 4.5) → Code (parse + blocs) → Notion API → Réponse JSON.\n\nID de la base Notion à remplacer dans le node 'Creer page Notion'.\n\nSchéma : Titre (TITLE), Catégorie (SELECT), Tags (MULTI_SELECT), Source (RICH_TEXT).",
+        "color": 4,
+        "width": 1800,
+        "height": 200
+      },
+      "id": "415b45b2-ecc2-4d4f-8981-8cbc9c604f64",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [190, 250]
+    }
+  ],
+  "connections": {
+    "Reception du brouillon": {
+      "main": [[{ "node": "Synthese par Claude", "type": "main", "index": 0 }]]
+    },
+    "Synthese par Claude": {
+      "main": [[{ "node": "Parse JSON Claude", "type": "main", "index": 0 }]]
+    },
+    "Parse JSON Claude": {
+      "main": [[{ "node": "Construire blocs Notion", "type": "main", "index": 0 }]]
+    },
+    "Construire blocs Notion": {
+      "main": [[{ "node": "Creer page Notion", "type": "main", "index": 0 }]]
+    },
+    "Creer page Notion": {
+      "main": [[{ "node": "Reponse au client", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "aiBuilderAssisted": true
+  },
+  "tags": []
+}
